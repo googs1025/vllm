@@ -993,12 +993,14 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
             return None
 
     @classmethod
-    @with_mtml_context
     def has_device_capability(
         cls,
         capability: tuple[int, int] | int,
         device_id: int = 0,
     ) -> bool:
+        # get_device_capability() is cached and manages its own MTML context.
+        # Wrapping this comparison would reinitialize MTML on every call,
+        # including capability checks made from attention hot paths.
         try:
             return super().has_device_capability(capability, device_id)
         except RuntimeError:
