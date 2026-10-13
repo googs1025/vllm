@@ -334,6 +334,13 @@ def resolve_optimization_contract(
             preferred_features=frozenset(),
         )
 
+    if model_config is not None and getattr(
+        getattr(model_config, "hf_config", None), "model_type", None
+    ) == "paddleocr_vl":
+        from .rotary import resolve_rotary_contract
+
+        contract = resolve_rotary_contract(contract, model_config)
+
     if model.is_hybrid is True:
         feature = OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
         contract = replace(
