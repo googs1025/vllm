@@ -27,11 +27,11 @@ tokens. This recipe covers two deployment shapes:
 | Attention backend | FlashMLA | FlashMLA | FlashMLA |
 | KV cache | FP8 | FP8 | FP8 |
 | Speculative decoding | DSpark, 4 tokens | DSpark, 4 tokens | DSpark, 4 tokens |
-| Maximum context | 8,192 tokens | 131,072 tokens | 131,072 tokens |
+| Maximum context | 8,192 tokens | 262,144 tokens | 262,144 tokens |
 | Maximum batched tokens | 8,192 | 8,192 | 8,192 |
 | Maximum sequences | 64 | 16 | 64 |
-| GPU memory utilization | 0.90 | 0.80 | 0.95 |
-| GPU prefix cache | Off | Off (Mooncake store) | On |
+| GPU memory utilization | 0.90 | 0.85 | 0.92 |
+| GPU prefix cache | Off | Off (Mooncake store) | Off (Mooncake store) |
 | CUDA graphs | `FULL_DECODE_ONLY` | Off | `FULL_DECODE_ONLY` |
 
 ## Prerequisites
@@ -60,7 +60,7 @@ export MODEL_PATH=/models/DeepSeek-V4-Flash-0731-FP8-mt
 ## Single node
 
 ```bash
-CUDAGRAPH_CAPTURE_SIZES="1,2,3,4,5,8,16,24,32,40,48,56,64"
+CUDAGRAPH_CAPTURE_SIZES="5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110,115,120,125,130,135,140,145,150,155,160,200,240,280,320"
 
 vllm serve "${MODEL_PATH}" \
   --trust-remote-code \
@@ -180,10 +180,10 @@ vllm serve "${MODEL_PATH}" \
   --tensor-parallel-size 8 \
   --served-model-name DeepSeek-V4-Flash \
   --port 28500 \
-  --max-model-len 131072 \
+  --max-model-len 262144 \
   --max-num-seqs 16 \
   --max-num-batched-tokens 8192 \
-  --gpu-memory-utilization 0.80 \
+  --gpu-memory-utilization 0.85 \
   --kv-cache-dtype fp8 \
   --no-enable-prefix-caching \
   --attention-backend FLASHMLA \
@@ -213,12 +213,12 @@ vllm serve "${MODEL_PATH}" \
   --tensor-parallel-size 8 \
   --served-model-name DeepSeek-V4-Flash \
   --port 8025 \
-  --max-model-len 131072 \
+  --max-model-len 262144 \
   --max-num-seqs 64 \
   --max-num-batched-tokens 8192 \
-  --gpu-memory-utilization 0.95 \
+  --gpu-memory-utilization 0.92 \
   --kv-cache-dtype fp8 \
-  --enable-prefix-caching \
+  --no-enable-prefix-caching \
   --attention-backend FLASHMLA \
   --speculative-config '{"method":"dspark","num_speculative_tokens":4}' \
   --compilation-config "{\"mode\":\"NONE\",\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[${CUDAGRAPH_CAPTURE_SIZES}]}" \
@@ -272,15 +272,18 @@ print(response.choices[0].message.content)
 - Keep TP8 on every node.
 - `--hf-overrides '{"expert_dtype":"fp8"}'` selects the FP8 routed-expert
   weights of this checkpoint.
-- Prefill uses `gpu-memory-utilization 0.80` to leave room for the FlashMLA
+- Prefill uses `gpu-memory-utilization 0.85` to leave room for the FlashMLA
   sparse-prefill workspace.
-- Prefill keeps the GPU prefix cache off and relies on the Mooncake store for
-  prefix reuse. It does not capture CUDA graphs because it only runs prefill.
-- Decode capture sizes list every DSpark-4 step of 1-32 concurrent requests
-  (5 tokens per request, 5-160 tokens) and 40, 48, 56 and 64 requests, up to
-  `--max-num-seqs 64`. vLLM rounds a capture size up to a multiple of 5, so a
-  missing size runs the batch in the next larger graph; batches above the
-  largest graph run eagerly.
+- Prefill and decode keep the GPU prefix cache off and rely on the Mooncake
+  store for prefix reuse. Decode receives every KV block from prefill, so a
+  decode-side prefix cache gets no hits.
+- Prefill does not capture CUDA graphs because it only runs prefill.
+- Capture sizes count tokens, not requests. The single-node and decode lists
+  cover every DSpark-4 step of 1-32 concurrent requests (5 tokens per request,
+  5-160 tokens) and 40, 48, 56 and 64 requests, up to `--max-num-seqs 64`.
+  vLLM rounds each capture size up to a multiple of 5 and drops any size that
+  rounds above the largest listed one, so a missing size runs the batch in the
+  next larger graph; batches above the largest graph run eagerly.
 - `--global_segment_size=400GB` sizes the store for 128K-input traffic up to
   16 concurrent requests. Mooncake starts evicting at 90% of the segment.
 - `MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES` is the SSD staging buffer on the
