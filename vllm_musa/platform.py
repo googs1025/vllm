@@ -35,11 +35,9 @@ import pymtml as pynvml
 from vllm_musa.optimization_contract import (
     ModelFamily,
     OptimizationFeature,
-)
-from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract import policy as contract_policy
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -83,10 +81,7 @@ def with_mtml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         try:
             return fn(*args, **kwargs)
         finally:
-            # Note: We intentionally do NOT call nvmlShutdown() here because
-            # pymtml has a bug where nvmlInit() fails after nvmlShutdown()
-            # has been called. The library handles cleanup on process exit.
-            pass
+            pynvml.nvmlShutdown()
 
     return wrapper
 
@@ -999,10 +994,8 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
         device_id: int = 0,
     ) -> bool:
         # No @with_mtml_context here: the base implementation only reads
-        # get_device_capability(), which is cached and brings its own MTML
-        # context. Wrapping this method as well would call nvmlInit() on every
-        # call, including calls made per attention layer per step from the
-        # Triton reshape-and-cache path.
+        # get_device_capability(), which is cached and manages its own balanced
+        # MTML context.
         try:
             return super().has_device_capability(capability, device_id)
         except RuntimeError:
@@ -1222,21 +1215,23 @@ class NonMtmlMUSAPlatform(MUSAPlatformBase):
         return False
 
 
-# Autodetect either MTML-enabled or non-MTML platform
-# based on whether MTML is available.
-mtml_available = False
-try:
+def _is_mtml_available() -> bool:
+    initialized = False
     try:
         pynvml.nvmlInit()
-        mtml_available = True
+        initialized = True
+        return True
     except Exception:
         # MTML may not be supported on all systems.
-        mtml_available = False
-finally:
-    # Note: We intentionally do NOT call nvmlShutdown() here because
-    # pymtml has a bug where nvmlInit() fails after nvmlShutdown()
-    # has been called. The library handles cleanup on process exit.
-    pass
+        return False
+    finally:
+        if initialized:
+            pynvml.nvmlShutdown()
+
+
+# Autodetect either MTML-enabled or non-MTML platform
+# based on whether MTML is available.
+mtml_available = _is_mtml_available()
 
 MUSAPlatform = MtmlMUSAPlatform if mtml_available else NonMtmlMUSAPlatform
 

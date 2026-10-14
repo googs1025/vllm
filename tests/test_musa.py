@@ -3,6 +3,7 @@
 """Tests for the MUSA Platform implementation."""
 
 import sys
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -829,19 +830,64 @@ class TestNonMtmlMUSAPlatform:
 class TestWithMtmlContext:
     """Tests for the with_mtml_context decorator."""
 
-    def test_decorator_returns_function_result(self):
-        """Test that the decorator returns the wrapped function's result."""
-        from vllm_musa.platform import mtml_available, with_mtml_context
+    def test_decorator_balances_context_and_returns_result(self, mock_pymtml):
+        """Successful calls release the MTML lifecycle reference."""
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
 
-        if not mtml_available:
-            pytest.skip("MTML not available")
+        from vllm_musa.platform import with_mtml_context
+
+        mock_pymtml.reset_mock()
 
         @with_mtml_context
         def test_func():
             return "success"
 
         result = test_func()
+
         assert result == "success"
+        assert mock_pymtml.nvmlInit.call_count == 1
+        assert mock_pymtml.nvmlShutdown.call_count == 1
+
+    def test_decorator_balances_context_when_wrapped_call_raises(self, mock_pymtml):
+        """Exceptional calls release the MTML lifecycle reference."""
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        from vllm_musa.platform import with_mtml_context
+
+        mock_pymtml.reset_mock()
+
+        @with_mtml_context
+        def fail():
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            fail()
+
+        assert mock_pymtml.nvmlInit.call_count == 1
+        assert mock_pymtml.nvmlShutdown.call_count == 1
+
+    def test_nested_decorators_balance_each_context(self, mock_pymtml):
+        """Nested MTML users retain and release separate lifecycle handles."""
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        from vllm_musa.platform import with_mtml_context
+
+        mock_pymtml.reset_mock()
+
+        @with_mtml_context
+        def inner():
+            return "nested"
+
+        @with_mtml_context
+        def outer():
+            return inner()
+
+        assert outer() == "nested"
+        assert mock_pymtml.nvmlInit.call_count == 2
+        assert mock_pymtml.nvmlShutdown.call_count == 2
 
     def test_decorator_preserves_function_name(self):
         """Test that the decorator preserves the wrapped function's name."""
@@ -862,21 +908,42 @@ class TestMtmlMUSAPlatform:
         if "vllm_musa.platform" in sys.modules:
             del sys.modules["vllm_musa.platform"]
 
-        from vllm_musa.platform import MtmlMUSAPlatform, mtml_available
-
-        if not mtml_available:
-            pytest.skip("MTML not available")
+        from vllm_musa.platform import MtmlMUSAPlatform
 
         MtmlMUSAPlatform.get_device_capability.cache_clear()
-        mock_pymtml.nvmlInit.reset_mock()
+        mock_pymtml.reset_mock()
 
-        results = [
-            MtmlMUSAPlatform.has_device_capability((3, 1)) for _ in range(60)
-        ]
+        results = [MtmlMUSAPlatform.has_device_capability((3, 1)) for _ in range(60)]
         results.append(MtmlMUSAPlatform.has_device_capability((4, 0)))
 
         assert results == [True] * 60 + [False]
         assert mock_pymtml.nvmlInit.call_count == 1
+        assert mock_pymtml.nvmlShutdown.call_count == 1
+
+    def test_mtml_availability_probe_balances_context(self, mock_pymtml):
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        platform = import_module("vllm_musa.platform")
+
+        mock_pymtml.reset_mock()
+
+        assert platform._is_mtml_available() is True
+        assert mock_pymtml.nvmlInit.call_count == 1
+        assert mock_pymtml.nvmlShutdown.call_count == 1
+
+    def test_mtml_availability_probe_does_not_shutdown_failed_init(self, mock_pymtml):
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        platform = import_module("vllm_musa.platform")
+
+        mock_pymtml.reset_mock()
+        mock_pymtml.nvmlInit.side_effect = RuntimeError("MTML unavailable")
+
+        assert platform._is_mtml_available() is False
+        assert mock_pymtml.nvmlInit.call_count == 1
+        assert mock_pymtml.nvmlShutdown.call_count == 0
 
     def test_get_device_capability_returns_3_1(self, mock_pymtml):
         """Test get_device_capability returns (3, 1) for FP8 support."""
