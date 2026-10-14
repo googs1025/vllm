@@ -924,24 +924,24 @@ class TestMtmlMUSAPlatform:
         if "vllm_musa.platform" in sys.modules:
             del sys.modules["vllm_musa.platform"]
 
+        mock_pymtml.reset_mock()
         platform = import_module("vllm_musa.platform")
 
-        mock_pymtml.reset_mock()
-
-        assert platform._is_mtml_available() is True
-        assert mock_pymtml.nvmlInit.call_count == 1
-        assert mock_pymtml.nvmlShutdown.call_count == 1
+        assert platform.mtml_available is True
+        # One pair probes MTML and one runs MUSAPlatform.log_warnings().
+        assert mock_pymtml.nvmlInit.call_count == 2
+        assert mock_pymtml.nvmlShutdown.call_count == 2
 
     def test_mtml_availability_probe_does_not_shutdown_failed_init(self, mock_pymtml):
         if "vllm_musa.platform" in sys.modules:
             del sys.modules["vllm_musa.platform"]
 
-        platform = import_module("vllm_musa.platform")
-
         mock_pymtml.reset_mock()
         mock_pymtml.nvmlInit.side_effect = RuntimeError("MTML unavailable")
 
-        assert platform._is_mtml_available() is False
+        platform = import_module("vllm_musa.platform")
+
+        assert platform.mtml_available is False
         assert mock_pymtml.nvmlInit.call_count == 1
         assert mock_pymtml.nvmlShutdown.call_count == 0
 

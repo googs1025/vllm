@@ -994,8 +994,9 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
         device_id: int = 0,
     ) -> bool:
         # No @with_mtml_context here: the base implementation only reads
-        # get_device_capability(), which is cached and manages its own balanced
-        # MTML context.
+        # get_device_capability(), which is cached and brings its own MTML
+        # context. Wrapping this method as well would cost an nvmlInit()/
+        # nvmlShutdown() pair on every call.
         try:
             return super().has_device_capability(capability, device_id)
         except RuntimeError:
@@ -1215,23 +1216,19 @@ class NonMtmlMUSAPlatform(MUSAPlatformBase):
         return False
 
 
-def _is_mtml_available() -> bool:
-    initialized = False
-    try:
-        pynvml.nvmlInit()
-        initialized = True
-        return True
-    except Exception:
-        # MTML may not be supported on all systems.
-        return False
-    finally:
-        if initialized:
-            pynvml.nvmlShutdown()
-
-
 # Autodetect either MTML-enabled or non-MTML platform
 # based on whether MTML is available.
-mtml_available = _is_mtml_available()
+mtml_available = False
+try:
+    try:
+        pynvml.nvmlInit()
+        mtml_available = True
+    except Exception:
+        # MTML may not be supported on all systems.
+        mtml_available = False
+finally:
+    if mtml_available:
+        pynvml.nvmlShutdown()
 
 MUSAPlatform = MtmlMUSAPlatform if mtml_available else NonMtmlMUSAPlatform
 
